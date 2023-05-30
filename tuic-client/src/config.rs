@@ -1,4 +1,5 @@
 use crate::utils::{CongestionControl, UdpRelayMode};
+use humantime::Duration as HumanDuration;
 use lexopt::{Arg, Error as ArgumentError, Parser};
 use log::LevelFilter;
 use serde::{de::Error as DeError, Deserialize, Deserializer};
@@ -29,7 +30,9 @@ Arguments:
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub relay: Relay,
+
     pub local: Local,
+
     #[serde(default = "default::log_level")]
     pub log_level: LevelFilter,
 }
@@ -39,36 +42,68 @@ pub struct Config {
 pub struct Relay {
     #[serde(deserialize_with = "deserialize_server")]
     pub server: (String, u16),
+
     pub uuid: Uuid,
+
     pub password: String,
+
     pub ip: Option<IpAddr>,
+
     #[serde(default = "default::relay::certificates")]
     pub certificates: Vec<PathBuf>,
+
     #[serde(
         default = "default::relay::udp_relay_mode",
         deserialize_with = "deserialize_from_str"
     )]
     pub udp_relay_mode: UdpRelayMode,
+
     #[serde(
         default = "default::relay::congestion_control",
         deserialize_with = "deserialize_from_str"
     )]
     pub congestion_control: CongestionControl,
+
     #[serde(default = "default::relay::alpn")]
     pub alpn: Vec<String>,
+
     #[serde(default = "default::relay::zero_rtt_handshake")]
     pub zero_rtt_handshake: bool,
+
     #[serde(default = "default::relay::disable_sni")]
     pub disable_sni: bool,
-    #[serde(default = "default::relay::timeout")]
+
+    #[serde(
+        default = "default::relay::timeout",
+        deserialize_with = "deserialize_duration"
+    )]
     pub timeout: Duration,
-    #[serde(default = "default::relay::heartbeat")]
+
+    #[serde(
+        default = "default::relay::heartbeat",
+        deserialize_with = "deserialize_duration"
+    )]
     pub heartbeat: Duration,
+
     #[serde(default = "default::relay::disable_native_certs")]
     pub disable_native_certs: bool,
-    #[serde(default = "default::relay::gc_interval")]
+
+    #[serde(default = "default::relay::send_window")]
+    pub send_window: u64,
+
+    #[serde(default = "default::relay::receive_window")]
+    pub receive_window: u32,
+
+    #[serde(
+        default = "default::relay::gc_interval",
+        deserialize_with = "deserialize_duration"
+    )]
     pub gc_interval: Duration,
-    #[serde(default = "default::relay::gc_lifetime")]
+
+    #[serde(
+        default = "default::relay::gc_lifetime",
+        deserialize_with = "deserialize_duration"
+    )]
     pub gc_lifetime: Duration,
 }
 
@@ -76,9 +111,13 @@ pub struct Relay {
 #[serde(deny_unknown_fields)]
 pub struct Local {
     pub server: SocketAddr,
+
     pub username: Option<String>,
+
     pub password: Option<String>,
+
     pub dual_stack: Option<bool>,
+
     #[serde(default = "default::local::max_packet_size")]
     pub max_packet_size: usize,
 }
@@ -157,6 +196,14 @@ mod default {
             false
         }
 
+        pub fn send_window() -> u64 {
+            8 * 1024 * 1024 * 2
+        }
+
+        pub fn receive_window() -> u32 {
+            8 * 1024 * 1024
+        }
+
         pub fn gc_interval() -> Duration {
             Duration::from_secs(3)
         }
@@ -201,6 +248,17 @@ where
         ),
         _ => Err(DeError::custom("invalid server address")),
     }
+}
+
+pub fn deserialize_duration<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+
+    s.parse::<HumanDuration>()
+        .map(|d| *d)
+        .map_err(DeError::custom)
 }
 
 #[derive(Debug, Error)]

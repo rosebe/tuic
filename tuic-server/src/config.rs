@@ -1,4 +1,5 @@
 use crate::utils::CongestionControl;
+use humantime::Duration as HumanDuration;
 use lexopt::{Arg, Error as ArgumentError, Parser};
 use log::LevelFilter;
 use serde::{de::Error as DeError, Deserialize, Deserializer};
@@ -23,32 +24,70 @@ Arguments:
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub server: SocketAddr,
+
     #[serde(deserialize_with = "deserialize_users")]
     pub users: HashMap<Uuid, String>,
+
     pub certificate: PathBuf,
+
     pub private_key: PathBuf,
+
     #[serde(
         default = "default::congestion_control",
         deserialize_with = "deserialize_from_str"
     )]
     pub congestion_control: CongestionControl,
+
     #[serde(default = "default::alpn")]
     pub alpn: Vec<String>,
+
     #[serde(default = "default::udp_relay_ipv6")]
     pub udp_relay_ipv6: bool,
+
     #[serde(default = "default::zero_rtt_handshake")]
     pub zero_rtt_handshake: bool,
+
     pub dual_stack: Option<bool>,
-    #[serde(default = "default::auth_timeout")]
+
+    #[serde(
+        default = "default::auth_timeout",
+        deserialize_with = "deserialize_duration"
+    )]
     pub auth_timeout: Duration,
-    #[serde(default = "default::max_idle_time")]
+
+    #[serde(
+        default = "default::task_negotiation_timeout",
+        deserialize_with = "deserialize_duration"
+    )]
+    pub task_negotiation_timeout: Duration,
+
+    #[serde(
+        default = "default::max_idle_time",
+        deserialize_with = "deserialize_duration"
+    )]
     pub max_idle_time: Duration,
+
     #[serde(default = "default::max_external_packet_size")]
     pub max_external_packet_size: usize,
-    #[serde(default = "default::gc_interval")]
+
+    #[serde(default = "default::send_window")]
+    pub send_window: u64,
+
+    #[serde(default = "default::receive_window")]
+    pub receive_window: u32,
+
+    #[serde(
+        default = "default::gc_interval",
+        deserialize_with = "deserialize_duration"
+    )]
     pub gc_interval: Duration,
-    #[serde(default = "default::gc_lifetime")]
+
+    #[serde(
+        default = "default::gc_lifetime",
+        deserialize_with = "deserialize_duration"
+    )]
     pub gc_lifetime: Duration,
+
     #[serde(default = "default::log_level")]
     pub log_level: LevelFilter,
 }
@@ -106,15 +145,27 @@ mod default {
     }
 
     pub fn auth_timeout() -> Duration {
-        Duration::from_secs(10)
+        Duration::from_secs(3)
+    }
+
+    pub fn task_negotiation_timeout() -> Duration {
+        Duration::from_secs(3)
     }
 
     pub fn max_idle_time() -> Duration {
-        Duration::from_secs(15)
+        Duration::from_secs(10)
     }
 
     pub fn max_external_packet_size() -> usize {
         1500
+    }
+
+    pub fn send_window() -> u64 {
+        8 * 1024 * 1024 * 2
+    }
+
+    pub fn receive_window() -> u32 {
+        8 * 1024 * 1024
     }
 
     pub fn gc_interval() -> Duration {
@@ -151,6 +202,17 @@ where
     }
 
     Ok(map)
+}
+
+pub fn deserialize_duration<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+
+    s.parse::<HumanDuration>()
+        .map(|d| *d)
+        .map_err(DeError::custom)
 }
 
 #[derive(Debug, Error)]

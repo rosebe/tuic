@@ -10,7 +10,10 @@ use std::{
 };
 use tokio::net;
 
-pub fn load_certs(paths: Vec<PathBuf>, disable_native: bool) -> Result<RootCertStore, Error> {
+pub(crate) fn load_certs(
+    paths: Vec<PathBuf>,
+    disable_native: bool,
+) -> Result<RootCertStore, Error> {
     let mut certs = RootCertStore::empty();
 
     for path in &paths {
@@ -30,8 +33,8 @@ pub fn load_certs(paths: Vec<PathBuf>, disable_native: bool) -> Result<RootCertS
     }
 
     if !disable_native {
-        for cert in rustls_native_certs::load_native_certs()? {
-            certs.add(&Certificate(cert.0))?;
+        for cert in rustls_native_certs::load_native_certs().map_err(Error::LoadNativeCerts)? {
+            let _ = certs.add(&Certificate(cert.0));
         }
     }
 

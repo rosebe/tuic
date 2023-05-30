@@ -1,13 +1,14 @@
 use rustls::{Certificate, PrivateKey};
 use rustls_pemfile::Item;
 use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
     fs::{self, File},
     io::{BufReader, Error as IoError},
     path::PathBuf,
     str::FromStr,
 };
 
-pub fn load_certs(path: PathBuf) -> Result<Vec<Certificate>, IoError> {
+pub(crate) fn load_certs(path: PathBuf) -> Result<Vec<Certificate>, IoError> {
     let mut file = BufReader::new(File::open(&path)?);
     let mut certs = Vec::new();
 
@@ -24,7 +25,7 @@ pub fn load_certs(path: PathBuf) -> Result<Vec<Certificate>, IoError> {
     Ok(certs)
 }
 
-pub fn load_priv_key(path: PathBuf) -> Result<PrivateKey, IoError> {
+pub(crate) fn load_priv_key(path: PathBuf) -> Result<PrivateKey, IoError> {
     let mut file = BufReader::new(File::open(&path)?);
     let mut priv_key = None;
 
@@ -44,6 +45,15 @@ pub fn load_priv_key(path: PathBuf) -> Result<PrivateKey, IoError> {
 pub enum UdpRelayMode {
     Native,
     Quic,
+}
+
+impl Display for UdpRelayMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Self::Native => write!(f, "native"),
+            Self::Quic => write!(f, "quic"),
+        }
+    }
 }
 
 pub enum CongestionControl {

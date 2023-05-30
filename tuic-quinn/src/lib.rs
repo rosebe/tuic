@@ -1,10 +1,11 @@
 #![doc = include_str!("../README.md")]
 
 use self::side::Side;
-use bytes::{BufMut, Bytes};
+use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use quinn::{
     Connection as QuinnConnection, ConnectionError, RecvStream, SendDatagramError, SendStream,
+    UnknownStream, VarInt,
 };
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},
@@ -66,7 +67,7 @@ impl<Side> Connection<Side> {
         let model = self.model.send_packet(assoc_id, addr, max_pkt_size);
 
         for (header, frag) in model.into_fragments(pkt) {
-            let mut buf = vec![0; header.len() + frag.len()];
+            let mut buf = BytesMut::with_capacity(header.len() + frag.len());
             header.write(&mut buf);
             buf.put_slice(frag);
             self.conn.send_datagram(Bytes::from(buf))?;
@@ -132,7 +133,7 @@ impl Connection<side::Client> {
 
         let mut send = self.conn.open_uni().await?;
         model.header().async_marshal(&mut send).await?;
-        send.close().await?; // stuck here
+        send.close().await?;
         Ok(())
     }
 
@@ -410,6 +411,16 @@ impl Connect {
             }
             Side::Server(model) => model.addr(),
         }
+    }
+
+    /// Immediately closes the `Connect` streams with the given error code. Returns the result of closing the send and receive streams, respectively.
+    pub fn reset(
+        &mut self,
+        error_code: VarInt,
+    ) -> (Result<(), UnknownStream>, Result<(), UnknownStream>) {
+        let send_res = self.send.reset(error_code);
+        let recv_res = self.recv.stop(error_code);
+        (send_res, recv_res)
     }
 }
 
