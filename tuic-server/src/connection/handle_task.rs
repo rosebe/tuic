@@ -1,5 +1,5 @@
-use super::{UdpSession, ERROR_CODE};
-use crate::{Connection, Error, UdpRelayMode};
+use super::{Connection, UdpSession, ERROR_CODE};
+use crate::{error::Error, utils::UdpRelayMode};
 use bytes::Bytes;
 use std::{
     collections::hash_map::Entry,
@@ -15,9 +15,9 @@ use tuic::Address;
 use tuic_quinn::{Authenticate, Connect, Packet};
 
 impl Connection {
-    pub(super) async fn handle_authenticate(&self, auth: Authenticate) {
+    pub async fn handle_authenticate(&self, auth: Authenticate) {
         log::info!(
-            "[{id:#08x}] [{addr}] [{user}] [authenticate] {auth_uuid}",
+            "[{id:#010x}] [{addr}] [{user}] [authenticate] {auth_uuid}",
             id = self.id(),
             addr = self.inner.remote_address(),
             user = self.auth,
@@ -25,11 +25,11 @@ impl Connection {
         );
     }
 
-    pub(super) async fn handle_connect(&self, conn: Connect) {
+    pub async fn handle_connect(&self, conn: Connect) {
         let target_addr = conn.addr().to_string();
 
         log::info!(
-            "[{id:#08x}] [{addr}] [{user}] [connect] {target_addr}",
+            "[{id:#010x}] [{addr}] [{user}] [connect] {target_addr}",
             id = self.id(),
             addr = self.inner.remote_address(),
             user = self.auth,
@@ -71,7 +71,7 @@ impl Connection {
         match process.await {
             Ok(()) => {}
             Err(err) => log::warn!(
-                "[{id:#08x}] [{addr}] [{user}] [connect] {target_addr}: {err}",
+                "[{id:#010x}] [{addr}] [{user}] [connect] {target_addr}: {err}",
                 id = self.id(),
                 addr = self.inner.remote_address(),
                 user = self.auth,
@@ -79,17 +79,18 @@ impl Connection {
         }
     }
 
-    pub(super) async fn handle_packet(&self, pkt: Packet, mode: UdpRelayMode) {
+    pub async fn handle_packet(&self, pkt: Packet, mode: UdpRelayMode) {
         let assoc_id = pkt.assoc_id();
         let pkt_id = pkt.pkt_id();
         let frag_id = pkt.frag_id();
         let frag_total = pkt.frag_total();
 
         log::info!(
-            "[{id:#08x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] {frag_id}/{frag_total}",
+            "[{id:#010x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] fragment {frag_id}/{frag_total}",
             id = self.id(),
             addr = self.inner.remote_address(),
             user = self.auth,
+            frag_id = frag_id + 1,
         );
 
         self.udp_relay_mode.store(Some(mode));
@@ -99,10 +100,11 @@ impl Connection {
             Ok(Some(res)) => res,
             Err(err) => {
                 log::warn!(
-                    "[{id:#08x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] {frag_id}/{frag_total}: {err}",
+                    "[{id:#010x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] fragment {frag_id}/{frag_total}: {err}",
                     id = self.id(),
                     addr = self.inner.remote_address(),
                     user = self.auth,
+                    frag_id = frag_id + 1,
                 );
                 return;
             }
@@ -110,7 +112,7 @@ impl Connection {
 
         let process = async {
             log::info!(
-                "[{id:#08x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] {src_addr}",
+                "[{id:#010x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] to {src_addr}",
                 id = self.id(),
                 addr = self.inner.remote_address(),
                 user = self.auth,
@@ -140,7 +142,7 @@ impl Connection {
 
         if let Err(err) = process.await {
             log::warn!(
-                "[{id:#08x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] {src_addr}: {err}",
+                "[{id:#010x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] to {src_addr}: {err}",
                 id = self.id(),
                 addr = self.inner.remote_address(),
                 user = self.auth,
@@ -149,9 +151,9 @@ impl Connection {
         }
     }
 
-    pub(super) async fn handle_dissociate(&self, assoc_id: u16) {
+    pub async fn handle_dissociate(&self, assoc_id: u16) {
         log::info!(
-            "[{id:#08x}] [{addr}] [{user}] [dissociate] [{assoc_id:#06x}]",
+            "[{id:#010x}] [{addr}] [{user}] [dissociate] [{assoc_id:#06x}]",
             id = self.id(),
             addr = self.inner.remote_address(),
             user = self.auth,
@@ -162,25 +164,25 @@ impl Connection {
         }
     }
 
-    pub(super) async fn handle_heartbeat(&self) {
+    pub async fn handle_heartbeat(&self) {
         log::info!(
-            "[{id:#08x}] [{addr}] [{user}] [heartbeat]",
+            "[{id:#010x}] [{addr}] [{user}] [heartbeat]",
             id = self.id(),
             addr = self.inner.remote_address(),
             user = self.auth,
         );
     }
 
-    pub(super) async fn relay_packet(self, pkt: Bytes, addr: Address, assoc_id: u16) {
+    pub async fn relay_packet(self, pkt: Bytes, addr: Address, assoc_id: u16) {
         let addr_display = addr.to_string();
 
         log::info!(
-            "[{id:#08x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [to-{mode}] {target_addr}",
+            "[{id:#010x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [to-{mode}] from {src_addr}",
             id = self.id(),
             addr = self.inner.remote_address(),
             user = self.auth,
             mode = self.udp_relay_mode.load().unwrap(),
-            target_addr = addr_display,
+            src_addr = addr_display,
         );
 
         let res = match self.udp_relay_mode.load().unwrap() {
@@ -190,12 +192,12 @@ impl Connection {
 
         if let Err(err) = res {
             log::warn!(
-                "[{id:#08x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [to-{mode}] {target_addr}: {err}",
+                "[{id:#010x}] [{addr}] [{user}] [packet] [{assoc_id:#06x}] [to-{mode}] from {src_addr}: {err}",
                 id = self.id(),
                 addr = self.inner.remote_address(),
                 user = self.auth,
                 mode = self.udp_relay_mode.load().unwrap(),
-                target_addr = addr_display,
+                src_addr = addr_display,
             );
         }
     }

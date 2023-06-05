@@ -1,5 +1,5 @@
 use super::Connection;
-use crate::{utils::UdpRelayMode, Error};
+use crate::{error::Error, utils::UdpRelayMode};
 use bytes::Bytes;
 use quinn::{RecvStream, SendStream, VarInt};
 use register_count::Register;
@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use tuic_quinn::Task;
 
 impl Connection {
-    pub(super) async fn accept_uni_stream(&self) -> Result<(RecvStream, Register), Error> {
+    pub async fn accept_uni_stream(&self) -> Result<(RecvStream, Register), Error> {
         let max = self.max_concurrent_uni_streams.load(Ordering::Relaxed);
 
         if self.remote_uni_stream_cnt.count() as u32 == max {
@@ -23,9 +23,7 @@ impl Connection {
         Ok((recv, reg))
     }
 
-    pub(super) async fn accept_bi_stream(
-        &self,
-    ) -> Result<(SendStream, RecvStream, Register), Error> {
+    pub async fn accept_bi_stream(&self) -> Result<(SendStream, RecvStream, Register), Error> {
         let max = self.max_concurrent_bi_streams.load(Ordering::Relaxed);
 
         if self.remote_bi_stream_cnt.count() as u32 == max {
@@ -41,24 +39,17 @@ impl Connection {
         Ok((send, recv, reg))
     }
 
-    pub(super) async fn accept_datagram(&self) -> Result<Bytes, Error> {
+    pub async fn accept_datagram(&self) -> Result<Bytes, Error> {
         Ok(self.conn.read_datagram().await?)
     }
 
-    pub(super) async fn handle_uni_stream(self, recv: RecvStream, _reg: Register) {
+    pub async fn handle_uni_stream(self, recv: RecvStream, _reg: Register) {
         log::debug!("[relay] incoming unidirectional stream");
 
         let res = match self.model.accept_uni_stream(recv).await {
             Err(err) => Err(Error::Model(err)),
             Ok(Task::Packet(pkt)) => match self.udp_relay_mode {
                 UdpRelayMode::Quic => {
-                    log::info!(
-                        "[relay] [packet] [{assoc_id:#06x}] [from-quic] [{pkt_id:#06x}] {frag_id}/{frag_total}",
-                        assoc_id = pkt.assoc_id(),
-                        pkt_id = pkt.pkt_id(),
-                        frag_id = pkt.frag_id(),
-                        frag_total = pkt.frag_total(),
-                    );
                     Self::handle_packet(pkt).await;
                     Ok(())
                 }
@@ -72,7 +63,7 @@ impl Connection {
         }
     }
 
-    pub(super) async fn handle_bi_stream(self, send: SendStream, recv: RecvStream, _reg: Register) {
+    pub async fn handle_bi_stream(self, send: SendStream, recv: RecvStream, _reg: Register) {
         log::debug!("[relay] incoming bidirectional stream");
 
         let res = match self.model.accept_bi_stream(send, recv).await {
@@ -85,20 +76,13 @@ impl Connection {
         }
     }
 
-    pub(super) async fn handle_datagram(self, dg: Bytes) {
+    pub async fn handle_datagram(self, dg: Bytes) {
         log::debug!("[relay] incoming datagram");
 
         let res = match self.model.accept_datagram(dg) {
             Err(err) => Err(Error::Model(err)),
             Ok(Task::Packet(pkt)) => match self.udp_relay_mode {
                 UdpRelayMode::Native => {
-                    log::info!(
-                        "[relay] [packet] [{assoc_id:#06x}] [from-native] [{pkt_id:#06x}] {frag_id}/{frag_total}",
-                        assoc_id = pkt.assoc_id(),
-                        pkt_id = pkt.pkt_id(),
-                        frag_id = pkt.frag_id(),
-                        frag_total = pkt.frag_total(),
-                    );
                     Self::handle_packet(pkt).await;
                     Ok(())
                 }

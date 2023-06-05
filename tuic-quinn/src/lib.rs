@@ -233,7 +233,7 @@ impl Connection<side::Client> {
                 if let Some(pkt) = self.model.recv_packet(pkt) {
                     let pos = dg.position() as usize;
                     let mut buf = dg.into_inner();
-                    if (pos + pkt.size() as usize) < buf.len() {
+                    if (pos + pkt.size() as usize) <= buf.len() {
                         buf = buf.slice(pos..pos + pkt.size() as usize);
                         Ok(Task::Packet(Packet::new(pkt, PacketSource::Native(buf))))
                     } else {
@@ -503,6 +503,16 @@ impl Packet {
     /// Returns the total number of fragments
     pub fn frag_total(&self) -> u8 {
         self.model.frag_total()
+    }
+
+    /// Whether the packet is from UDP relay mode `quic`
+    pub fn is_from_quic(&self) -> bool {
+        matches!(self.src, PacketSource::Quic(_))
+    }
+
+    /// Whether the packet is from UDP relay mode `native`
+    pub fn is_from_native(&self) -> bool {
+        matches!(self.src, PacketSource::Native(_))
     }
 
     /// Accepts the packet payload. If the packet is fragmented and not yet fully assembled, `Ok(None)` is returned.

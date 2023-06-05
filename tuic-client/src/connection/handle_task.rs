@@ -1,6 +1,7 @@
 use super::Connection;
-use crate::{socks5::UDP_SESSIONS as SOCKS5_UDP_SESSIONS, utils::UdpRelayMode, Error};
+use crate::{error::Error, socks5::UDP_SESSIONS as SOCKS5_UDP_SESSIONS, utils::UdpRelayMode};
 use bytes::Bytes;
+use quinn::ZeroRttAccepted;
 use socks5_proto::Address as Socks5Address;
 use std::time::Duration;
 use tokio::time;
@@ -8,7 +9,12 @@ use tuic::Address;
 use tuic_quinn::{Connect, Packet};
 
 impl Connection {
-    pub(super) async fn authenticate(self) {
+    pub async fn authenticate(self, zero_rtt_accepted: Option<ZeroRttAccepted>) {
+        if let Some(zero_rtt_accepted) = zero_rtt_accepted {
+            log::debug!("[relay] [authenticate] waiting for connection to be fully established");
+            zero_rtt_accepted.await;
+        }
+
         log::debug!("[relay] [authenticate] sending authentication");
 
         match self
@@ -39,11 +45,11 @@ impl Connection {
 
         match self.udp_relay_mode {
             UdpRelayMode::Native => {
-                log::info!("[relay] [packet] [{assoc_id:#06x}] [to-native] {addr_display}");
+                log::info!("[relay] [packet] [{assoc_id:#06x}] [to-native] to {addr_display}");
                 match self.model.packet_native(pkt, addr, assoc_id) {
                     Ok(()) => Ok(()),
                     Err(err) => {
-                        log::warn!("[relay] [packet] [{assoc_id:#06x}] [to-native] failed relaying packet to {addr_display}: {err}");
+                        log::warn!("[relay] [packet] [{assoc_id:#06x}] [to-native] to {addr_display}: {err}");
                         Err(Error::Model(err))
                     }
                 }
@@ -53,7 +59,9 @@ impl Connection {
                 match self.model.packet_quic(pkt, addr, assoc_id).await {
                     Ok(()) => Ok(()),
                     Err(err) => {
-                        log::warn!("[relay] [packet] [{assoc_id:#06x}] [to-quic] failed relaying packet to {addr_display}: {err}");
+                        log::warn!(
+                            "[relay] [packet] [{assoc_id:#06x}] [to-quic] to {addr_display}: {err}"
+                        );
                         Err(Error::Model(err))
                     }
                 }
@@ -66,13 +74,13 @@ impl Connection {
         match self.model.dissociate(assoc_id).await {
             Ok(()) => Ok(()),
             Err(err) => {
-                log::warn!("[relay] [dissociate] [{assoc_id:#06x}] failed dissociating: {err}");
+                log::warn!("[relay] [dissociate] [{assoc_id:#06x}] {err}");
                 Err(Error::Model(err))
             }
         }
     }
 
-    pub(super) async fn heartbeat(self, heartbeat: Duration) {
+    pub async fn heartbeat(self, heartbeat: Duration) {
         loop {
             time::sleep(heartbeat).await;
 
@@ -86,18 +94,32 @@ impl Connection {
 
             match self.model.heartbeat().await {
                 Ok(()) => log::debug!("[relay] [heartbeat]"),
-                Err(err) => log::warn!("[relay] [heartbeat] heartbeat sending error: {err}"),
+                Err(err) => log::warn!("[relay] [heartbeat] {err}"),
             }
         }
     }
 
-    pub(super) async fn handle_packet(pkt: Packet) {
+    pub async fn handle_packet(pkt: Packet) {
         let assoc_id = pkt.assoc_id();
         let pkt_id = pkt.pkt_id();
 
+        let mode = if pkt.is_from_native() {
+            "native"
+        } else if pkt.is_from_quic() {
+            "quic"
+        } else {
+            unreachable!()
+        };
+
+        log::info!(
+            "[relay] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] fragment {frag_id}/{frag_total}",
+            frag_id = pkt.frag_id() + 1,
+            frag_total = pkt.frag_total(),
+        );
+
         match pkt.accept().await {
             Ok(Some((pkt, addr, _))) => {
-                log::info!("[relay] [packet] [{assoc_id:#06x}] [from-native] [{pkt_id:#06x}] {addr}");
+                log::info!("[relay] [packet] [{assoc_id:#06x}] [from-{mode}] [{pkt_id:#06x}] from {addr}");
 
                 let addr = match addr {
                     Address::None => unreachable!(),

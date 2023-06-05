@@ -1,7 +1,7 @@
 use crate::{
     config::Relay,
+    error::Error,
     utils::{self, CongestionControl, ServerAddr, UdpRelayMode},
-    Error,
 };
 use crossbeam_utils::atomic::AtomicCell;
 use once_cell::sync::OnceCell;
@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use quinn::{
     congestion::{BbrConfig, CubicConfig, NewRenoConfig},
     ClientConfig, Connection as QuinnConnection, Endpoint as QuinnEndpoint, EndpointConfig,
-    TokioRuntime, TransportConfig, VarInt,
+    TokioRuntime, TransportConfig, VarInt, ZeroRttAccepted,
 };
 use register_count::Counter;
 use rustls::{version, ClientConfig as RustlsClientConfig};
@@ -32,7 +32,7 @@ static ENDPOINT: OnceCell<Mutex<Endpoint>> = OnceCell::new();
 static CONNECTION: AsyncOnceCell<AsyncMutex<Connection>> = AsyncOnceCell::const_new();
 static TIMEOUT: AtomicCell<Duration> = AtomicCell::new(Duration::from_secs(0));
 
-pub(crate) const ERROR_CODE: VarInt = VarInt::from_u32(0);
+pub const ERROR_CODE: VarInt = VarInt::from_u32(0);
 const DEFAULT_CONCURRENT_STREAMS: u32 = 32;
 
 #[derive(Clone)]
@@ -60,7 +60,7 @@ impl Connection {
             .with_root_certificates(certs)
             .with_no_client_auth();
 
-        crypto.alpn_protocols = cfg.alpn.into_iter().map(|alpn| alpn.into_bytes()).collect();
+        crypto.alpn_protocols = cfg.alpn;
         crypto.enable_early_data = true;
         crypto.enable_sni = !cfg.disable_sni;
 
@@ -108,7 +108,7 @@ impl Connection {
             ep,
             server: ServerAddr::new(cfg.server.0, cfg.server.1, cfg.ip),
             uuid: cfg.uuid,
-            password: Arc::from(cfg.password.into_bytes().into_boxed_slice()),
+            password: cfg.password,
             udp_relay_mode: cfg.udp_relay_mode,
             zero_rtt_handshake: cfg.zero_rtt_handshake,
             heartbeat: cfg.heartbeat,
@@ -159,8 +159,10 @@ impl Connection {
         Ok(conn)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new(
         conn: QuinnConnection,
+        zero_rtt_accepted: Option<ZeroRttAccepted>,
         udp_relay_mode: UdpRelayMode,
         uuid: Uuid,
         password: Arc<[u8]>,
@@ -180,15 +182,24 @@ impl Connection {
             max_concurrent_bi_streams: Arc::new(AtomicU32::new(DEFAULT_CONCURRENT_STREAMS)),
         };
 
-        tokio::spawn(conn.clone().init(heartbeat, gc_interval, gc_lifetime));
+        tokio::spawn(
+            conn.clone()
+                .init(zero_rtt_accepted, heartbeat, gc_interval, gc_lifetime),
+        );
 
         conn
     }
 
-    async fn init(self, heartbeat: Duration, gc_interval: Duration, gc_lifetime: Duration) {
+    async fn init(
+        self,
+        zero_rtt_accepted: Option<ZeroRttAccepted>,
+        heartbeat: Duration,
+        gc_interval: Duration,
+        gc_lifetime: Duration,
+    ) {
         log::info!("[relay] connection established");
 
-        tokio::spawn(self.clone().authenticate());
+        tokio::spawn(self.clone().authenticate(zero_rtt_accepted));
         tokio::spawn(self.clone().heartbeat(heartbeat));
         tokio::spawn(self.clone().collect_garbage(gc_interval, gc_lifetime));
 
@@ -270,22 +281,23 @@ impl Endpoint {
                 }
 
                 let conn = self.ep.connect(addr, self.server.server_name())?;
-                let conn = if self.zero_rtt_handshake {
+                let (conn, zero_rtt_accepted) = if self.zero_rtt_handshake {
                     match conn.into_0rtt() {
-                        Ok((conn, _)) => conn,
-                        Err(conn) => conn.await?,
+                        Ok((conn, zero_rtt_accepted)) => (conn, Some(zero_rtt_accepted)),
+                        Err(conn) => (conn.await?, None),
                     }
                 } else {
-                    conn.await?
+                    (conn.await?, None)
                 };
 
-                Ok(conn)
+                Ok((conn, zero_rtt_accepted))
             };
 
             match connect_to.await {
-                Ok(conn) => {
+                Ok((conn, zero_rtt_accepted)) => {
                     return Ok(Connection::new(
                         conn,
+                        zero_rtt_accepted,
                         self.udp_relay_mode,
                         self.uuid,
                         self.password.clone(),

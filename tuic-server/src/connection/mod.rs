@@ -1,5 +1,5 @@
 use self::{authenticated::Authenticated, udp_session::UdpSession};
-use crate::{Error, UdpRelayMode};
+use crate::{error::Error, utils::UdpRelayMode};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 use quinn::{Connecting, Connection as QuinnConnection, VarInt};
@@ -18,14 +18,14 @@ mod handle_stream;
 mod handle_task;
 mod udp_session;
 
-pub(crate) const ERROR_CODE: VarInt = VarInt::from_u32(0);
-pub(crate) const DEFAULT_CONCURRENT_STREAMS: u32 = 32;
+pub const ERROR_CODE: VarInt = VarInt::from_u32(0);
+pub const DEFAULT_CONCURRENT_STREAMS: u32 = 32;
 
 #[derive(Clone)]
 pub struct Connection {
     inner: QuinnConnection,
     model: Model<side::Server>,
-    users: Arc<HashMap<Uuid, Vec<u8>>>,
+    users: Arc<HashMap<Uuid, Box<[u8]>>>,
     udp_relay_ipv6: bool,
     auth: Authenticated,
     task_negotiation_timeout: Duration,
@@ -42,7 +42,7 @@ pub struct Connection {
 impl Connection {
     pub async fn handle(
         conn: Connecting,
-        users: Arc<HashMap<Uuid, Vec<u8>>>,
+        users: Arc<HashMap<Uuid, Box<[u8]>>>,
         udp_relay_ipv6: bool,
         zero_rtt_handshake: bool,
         auth_timeout: Duration,
@@ -75,7 +75,7 @@ impl Connection {
         match init.await {
             Ok(conn) => {
                 log::info!(
-                    "[{id:#08x}] [{addr}] [{user}] connection established",
+                    "[{id:#010x}] [{addr}] [{user}] connection established",
                     id = conn.id(),
                     user = conn.auth,
                 );
@@ -103,27 +103,31 @@ impl Connection {
 
                     match handle_incoming.await {
                         Ok(()) => {}
-                        Err(err) if err.is_locally_closed() => {}
-                        Err(err) if err.is_timeout_closed() => {
+                        Err(err) if err.is_trivial() => {
                             log::debug!(
-                                "[{id:#08x}] [{addr}] [{user}] connection timeout",
+                                "[{id:#010x}] [{addr}] [{user}] {err}",
                                 id = conn.id(),
                                 user = conn.auth,
                             );
                         }
                         Err(err) => log::warn!(
-                            "[{id:#08x}] [{addr}] [{user}] connection error: {err}",
+                            "[{id:#010x}] [{addr}] [{user}] connection error: {err}",
                             id = conn.id(),
                             user = conn.auth,
                         ),
                     }
                 }
             }
-            Err(err) if err.is_locally_closed() || err.is_timeout_closed() => unreachable!(),
+            Err(err) if err.is_trivial() => {
+                log::debug!(
+                    "[{id:#010x}] [{addr}] [unauthenticated] {err}",
+                    id = u32::MAX,
+                );
+            }
             Err(err) => {
                 log::warn!(
-                    "[{id:#08x}] [{addr}] [unauthenticated] connection establishing error: {err}",
-                    id = usize::MAX,
+                    "[{id:#010x}] [{addr}] [unauthenticated] {err}",
+                    id = u32::MAX,
                 )
             }
         }
@@ -131,7 +135,7 @@ impl Connection {
 
     fn new(
         conn: QuinnConnection,
-        users: Arc<HashMap<Uuid, Vec<u8>>>,
+        users: Arc<HashMap<Uuid, Box<[u8]>>>,
         udp_relay_ipv6: bool,
         task_negotiation_timeout: Duration,
         max_external_pkt_size: usize,
@@ -173,7 +177,7 @@ impl Connection {
 
         if self.auth.get().is_none() {
             log::warn!(
-                "[{id:#08x}] [{addr}] [unauthenticated] [authenticate] timeout",
+                "[{id:#010x}] [{addr}] [unauthenticated] [authenticate] timeout",
                 id = self.id(),
                 addr = self.inner.remote_address(),
             );
@@ -190,7 +194,7 @@ impl Connection {
             }
 
             log::debug!(
-                "[{id:#08x}] [{addr}] [{user}] packet fragment garbage collecting event",
+                "[{id:#010x}] [{addr}] [{user}] packet fragment garbage collecting event",
                 id = self.id(),
                 addr = self.inner.remote_address(),
                 user = self.auth,
